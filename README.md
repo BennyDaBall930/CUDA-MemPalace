@@ -12,6 +12,17 @@
 
 # MemPalace
 
+## CUDA-MemPalace additions
+
+This fork advances MemPalace as a CUDA-accelerated persistent memory system while keeping the original local-first contract.
+
+- Opt-in CUDA/torch exact retrieval over Chroma-backed persisted embeddings.
+- Persisted exact sidecar with deterministic rebuild, stale marker, and finality behavior.
+- Optional compiled CUDA score-vector and deterministic top-k kernels behind a safe backend seam.
+- Fresh Start structured-memory layer with typed facts, relations, scopes, and support-separated recall.
+- Explicit maintenance tools for cleanup, replay/recovery, consolidation, and truth supersession.
+- Diagnostic evidence posture: parity and exact top-k ID correctness come before performance claims.
+
 Local-first AI memory. Verbatim storage, pluggable backend, 96.6% R@5 raw on LongMemEval — zero API calls.
 
 [![][version-shield]][release-link]
@@ -35,18 +46,6 @@ The retrieval layer is pluggable. The current default is ChromaDB; the
 interface is defined in [`mempalace/backends/base.py`](mempalace/backends/base.py)
 and alternative backends can be dropped in without touching the rest of
 the system.
-
-This CUDA fork adds an opt-in exact-search lane for local GPU campaigns:
-Chroma remains the durable source of truth, a persisted exact sidecar provides
-deterministic retrieval, and optional custom CUDA kernels can replace torch
-score-vector/top-k work only when parity tests pass. Claims remain diagnostic
-until score parity and exact top-k ID parity are shown.
-
-Fresh Start integration is exposed as explicit structured-memory surfaces:
-typed/scoped facts live in the local SQLite knowledge graph, recall separates
-`answer_facts` from inspectable `support`, and maintenance tools handle
-cleanup, replay/recovery, consolidation, and truth supersession without turning
-support sidecars into hidden answer-deciding truth.
 
 Nothing leaves your machine unless you opt in.
 
