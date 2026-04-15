@@ -42,6 +42,12 @@ deterministic retrieval, and optional custom CUDA kernels can replace torch
 score-vector/top-k work only when parity tests pass. Claims remain diagnostic
 until score parity and exact top-k ID parity are shown.
 
+Fresh Start integration is exposed as explicit structured-memory surfaces:
+typed/scoped facts live in the local SQLite knowledge graph, recall separates
+`answer_facts` from inspectable `support`, and maintenance tools handle
+cleanup, replay/recovery, consolidation, and truth supersession without turning
+support sidecars into hidden answer-deciding truth.
+
 Nothing leaves your machine unless you opt in.
 
 Architecture, concepts, and mining flows:
@@ -133,12 +139,14 @@ python benchmarks/longmemeval_bench.py /path/to/longmemeval_s_cleaned.json
 
 MemPalace includes a temporal entity-relationship graph with validity
 windows — add, query, invalidate, timeline — backed by local SQLite.
+CUDA-MemPalace extends that graph with typed facts, scopes, support references,
+replay events, and explicit supersession links.
 Usage and tool reference:
 [mempalaceofficial.com/concepts/knowledge-graph](https://mempalaceofficial.com/concepts/knowledge-graph.html).
 
 ## MCP server
 
-29 MCP tools cover palace reads/writes, knowledge-graph operations,
+35 MCP tools cover palace reads/writes, knowledge-graph operations,
 cross-wing navigation, drawer management, and agent diaries. Installation
 and the full tool list:
 [mempalaceofficial.com/reference/mcp-tools](https://mempalaceofficial.com/reference/mcp-tools.html).

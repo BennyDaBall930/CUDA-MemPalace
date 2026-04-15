@@ -132,7 +132,16 @@ except (OSError, NotImplementedError):
 
 # Keys whose values should be redacted in WAL entries to avoid logging sensitive content
 _WAL_REDACT_KEYS = frozenset(
-    {"content", "content_preview", "document", "entry", "entry_preview", "query", "text"}
+    {
+        "content",
+        "content_preview",
+        "document",
+        "entry",
+        "entry_preview",
+        "query",
+        "text",
+        "support_text",
+    }
 )
 
 
@@ -836,26 +845,78 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
 # ==================== KNOWLEDGE GRAPH ====================
 
 
-def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
+def _support_from_facts(facts):
+    return [
+        {
+            "fact_id": fact["id"],
+            "source_closet": fact.get("source_closet"),
+            "source_drawer_id": fact.get("source_drawer_id"),
+            "source_file": fact.get("source_file"),
+            "support_text": fact.get("support_text"),
+            "support": fact.get("support", []),
+        }
+        for fact in facts
+        if fact.get("support")
+        or fact.get("source_closet")
+        or fact.get("source_drawer_id")
+        or fact.get("source_file")
+        or fact.get("support_text")
+    ]
+
+
+def tool_kg_query(
+    entity: str,
+    as_of: str = None,
+    direction: str = "both",
+    scope: str = None,
+    current_only: bool = False,
+):
     """Query the knowledge graph for an entity's relationships."""
     try:
         entity = sanitize_kg_value(entity, "entity")
+        if scope is not None:
+            scope = sanitize_name(scope, "scope")
     except ValueError as e:
         return {"error": str(e)}
     if direction not in ("outgoing", "incoming", "both"):
         return {"error": "direction must be 'outgoing', 'incoming', or 'both'"}
-    results = _kg.query_entity(entity, as_of=as_of, direction=direction)
-    return {"entity": entity, "as_of": as_of, "facts": results, "count": len(results)}
+    results = _kg.query_entity(
+        entity,
+        as_of=as_of,
+        direction=direction,
+        scope=scope,
+        current_only=current_only,
+    )
+    return {
+        "entity": entity,
+        "as_of": as_of,
+        "scope": scope or "all",
+        "facts": results,
+        "support": _support_from_facts(results),
+        "count": len(results),
+        "policy": "facts are explicit structured memory; support is inspectable evidence, not hidden truth",
+    }
 
 
 def tool_kg_add(
-    subject: str, predicate: str, object: str, valid_from: str = None, source_closet: str = None
+    subject: str,
+    predicate: str,
+    object: str,
+    valid_from: str = None,
+    source_closet: str = None,
+    source_drawer_id: str = None,
+    source_file: str = None,
+    fact_type: str = "relation",
+    scope: str = "global",
+    support_text: str = None,
 ):
-    """Add a relationship to the knowledge graph."""
+    """Add a typed/scoped relationship to the knowledge graph."""
     try:
         subject = sanitize_kg_value(subject, "subject")
         predicate = sanitize_name(predicate, "predicate")
         object = sanitize_kg_value(object, "object")
+        fact_type = sanitize_name(fact_type, "fact_type")
+        scope = sanitize_name(scope, "scope")
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -867,32 +928,133 @@ def tool_kg_add(
             "object": object,
             "valid_from": valid_from,
             "source_closet": source_closet,
+            "source_drawer_id": source_drawer_id,
+            "source_file": source_file,
+            "fact_type": fact_type,
+            "scope": scope,
+            "support_text": support_text,
         },
     )
     triple_id = _kg.add_triple(
-        subject, predicate, object, valid_from=valid_from, source_closet=source_closet
+        subject,
+        predicate,
+        object,
+        valid_from=valid_from,
+        source_closet=source_closet,
+        source_drawer_id=source_drawer_id,
+        source_file=source_file,
+        fact_type=fact_type,
+        scope=scope,
+        support_text=support_text,
     )
     return {"success": True, "triple_id": triple_id, "fact": f"{subject} → {predicate} → {object}"}
 
 
-def tool_kg_invalidate(subject: str, predicate: str, object: str, ended: str = None):
+def tool_kg_invalidate(
+    subject: str,
+    predicate: str,
+    object: str,
+    ended: str = None,
+    scope: str = None,
+    reason: str = None,
+):
     """Mark a fact as no longer true (set end date)."""
     try:
         subject = sanitize_kg_value(subject, "subject")
         predicate = sanitize_name(predicate, "predicate")
         object = sanitize_kg_value(object, "object")
+        if scope is not None:
+            scope = sanitize_name(scope, "scope")
     except ValueError as e:
         return {"success": False, "error": str(e)}
     _wal_log(
         "kg_invalidate",
-        {"subject": subject, "predicate": predicate, "object": object, "ended": ended},
+        {
+            "subject": subject,
+            "predicate": predicate,
+            "object": object,
+            "ended": ended,
+            "scope": scope,
+            "reason": reason,
+        },
     )
-    _kg.invalidate(subject, predicate, object, ended=ended)
+    changed = _kg.invalidate(subject, predicate, object, ended=ended, scope=scope, reason=reason)
     return {
         "success": True,
         "fact": f"{subject} → {predicate} → {object}",
         "ended": ended or "today",
+        "scope": scope or "all",
+        "changed": changed,
     }
+
+
+def tool_kg_recall(entity: str, as_of: str = None, direction: str = "both", scope: str = None):
+    """Recall structured facts with answer/support separation."""
+    try:
+        entity = sanitize_kg_value(entity, "entity")
+        if scope is not None:
+            scope = sanitize_name(scope, "scope")
+    except ValueError as e:
+        return {"error": str(e)}
+    if direction not in ("outgoing", "incoming", "both"):
+        return {"error": "direction must be 'outgoing', 'incoming', or 'both'"}
+    return _kg.structured_recall(entity, as_of=as_of, direction=direction, scope=scope)
+
+
+def tool_kg_supersede(
+    subject: str,
+    predicate: str,
+    old_object: str,
+    new_object: str,
+    valid_from: str = None,
+    ended: str = None,
+    scope: str = "global",
+    reason: str = None,
+    support_text: str = None,
+    source_drawer_id: str = None,
+    source_file: str = None,
+):
+    """Replace an old fact with a new fact and link the supersession."""
+    try:
+        subject = sanitize_kg_value(subject, "subject")
+        predicate = sanitize_name(predicate, "predicate")
+        old_object = sanitize_kg_value(old_object, "old_object")
+        new_object = sanitize_kg_value(new_object, "new_object")
+        scope = sanitize_name(scope, "scope")
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    _wal_log(
+        "kg_supersede",
+        {
+            "subject": subject,
+            "predicate": predicate,
+            "old_object": old_object,
+            "new_object": new_object,
+            "valid_from": valid_from,
+            "ended": ended,
+            "scope": scope,
+            "reason": reason,
+            "support_text": support_text,
+            "source_drawer_id": source_drawer_id,
+            "source_file": source_file,
+        },
+    )
+    result = _kg.supersede_fact(
+        subject,
+        predicate,
+        old_object,
+        new_object,
+        valid_from=valid_from,
+        ended=ended,
+        scope=scope,
+        reason=reason,
+        support_text=support_text,
+        source_drawer_id=source_drawer_id,
+        source_file=source_file,
+    )
+    result["success"] = True
+    result["scope"] = scope
+    return result
 
 
 def tool_kg_timeline(entity: str = None):
@@ -909,6 +1071,34 @@ def tool_kg_timeline(entity: str = None):
 def tool_kg_stats():
     """Knowledge graph overview: entities, triples, relationship types."""
     return _kg.stats()
+
+
+def tool_kg_maintenance(action: str = "report", dry_run: bool = True):
+    """Run explicit KG maintenance actions without changing answer policy."""
+    action = (action or "report").strip().lower()
+    if action == "report":
+        return {"success": True, "action": action, "report": _kg.maintenance_report()}
+    if action == "cleanup":
+        return {"success": True, "action": action, "result": _kg.cleanup(dry_run=dry_run)}
+    if action == "consolidate":
+        return {"success": True, "action": action, "result": _kg.consolidate(dry_run=dry_run)}
+    return {"success": False, "error": "action must be report, cleanup, or consolidate"}
+
+
+def tool_kg_export_replay(limit: int = 1000):
+    """Export structured KG write events for replay/recovery."""
+    limit = max(1, min(int(limit), 10000))
+    events = _kg.export_replay_events(limit=limit)
+    return {"success": True, "events": events, "count": len(events)}
+
+
+def tool_kg_replay(events: list, clear_first: bool = False):
+    """Replay exported KG events into the current KG database."""
+    if not isinstance(events, list):
+        return {"success": False, "error": "events must be a list"}
+    result = _kg.replay_events(events, clear_first=clear_first)
+    result["success"] = True
+    return result
 
 
 # ==================== AGENT DIARY ====================
@@ -1214,6 +1404,26 @@ TOOLS = {
         },
         "handler": tool_kg_add,
     },
+    "mempalace_kg_add_structured": {
+        "description": "Add a typed/scoped fact with explicit support evidence. Use when the fact needs scope or source support.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string", "description": "The entity doing/being something"},
+                "predicate": {"type": "string", "description": "Relationship type"},
+                "object": {"type": "string", "description": "Connected entity or value"},
+                "valid_from": {"type": "string", "description": "When this became true"},
+                "source_closet": {"type": "string", "description": "Supporting closet ID"},
+                "source_drawer_id": {"type": "string", "description": "Supporting drawer ID"},
+                "source_file": {"type": "string", "description": "Supporting source file"},
+                "fact_type": {"type": "string", "description": "Fact type, e.g. relation, preference, claim"},
+                "scope": {"type": "string", "description": "Fact scope, e.g. global or project name"},
+                "support_text": {"type": "string", "description": "Short evidence excerpt or note"},
+            },
+            "required": ["subject", "predicate", "object"],
+        },
+        "handler": tool_kg_add,
+    },
     "mempalace_kg_invalidate": {
         "description": "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
         "input_schema": {
@@ -1248,6 +1458,74 @@ TOOLS = {
         "description": "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_kg_stats,
+    },
+    "mempalace_kg_recall": {
+        "description": "Recall structured facts with answer_facts separated from support evidence. This is advisory memory, not hidden truth.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {"type": "string", "description": "Entity to recall"},
+                "as_of": {"type": "string", "description": "Optional YYYY-MM-DD date filter"},
+                "direction": {"type": "string", "description": "outgoing, incoming, or both"},
+                "scope": {"type": "string", "description": "Optional fact scope"},
+            },
+            "required": ["entity"],
+        },
+        "handler": tool_kg_recall,
+    },
+    "mempalace_kg_supersede": {
+        "description": "Replace an old fact with a new fact, closing the old fact and linking the supersession.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string", "description": "Entity"},
+                "predicate": {"type": "string", "description": "Relationship"},
+                "old_object": {"type": "string", "description": "Object that is no longer current"},
+                "new_object": {"type": "string", "description": "Replacement object"},
+                "valid_from": {"type": "string", "description": "When the new fact became true"},
+                "ended": {"type": "string", "description": "When the old fact stopped being true"},
+                "scope": {"type": "string", "description": "Fact scope"},
+                "reason": {"type": "string", "description": "Reason for supersession"},
+                "support_text": {"type": "string", "description": "Short supporting evidence"},
+                "source_drawer_id": {"type": "string", "description": "Supporting drawer ID"},
+                "source_file": {"type": "string", "description": "Supporting source file"},
+            },
+            "required": ["subject", "predicate", "old_object", "new_object"],
+        },
+        "handler": tool_kg_supersede,
+    },
+    "mempalace_kg_maintenance": {
+        "description": "Run explicit KG maintenance: report, cleanup orphan entities, or consolidate duplicate active facts.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "report, cleanup, or consolidate"},
+                "dry_run": {"type": "boolean", "description": "Preview changes without mutating data"},
+            },
+        },
+        "handler": tool_kg_maintenance,
+    },
+    "mempalace_kg_export_replay": {
+        "description": "Export structured KG write events for replay/recovery.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Maximum events to export"},
+            },
+        },
+        "handler": tool_kg_export_replay,
+    },
+    "mempalace_kg_replay": {
+        "description": "Replay exported KG events into this KG database for recovery.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "events": {"type": "array", "description": "Events returned by mempalace_kg_export_replay"},
+                "clear_first": {"type": "boolean", "description": "Clear KG before replaying"},
+            },
+            "required": ["events"],
+        },
+        "handler": tool_kg_replay,
     },
     "mempalace_traverse": {
         "description": "Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).",

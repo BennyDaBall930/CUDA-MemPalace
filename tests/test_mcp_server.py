@@ -116,6 +116,8 @@ class TestHandleRequest:
         assert "mempalace_search" in names
         assert "mempalace_add_drawer" in names
         assert "mempalace_kg_add" in names
+        assert "mempalace_kg_recall" in names
+        assert "mempalace_kg_maintenance" in names
 
     def test_null_arguments_does_not_hang(self, monkeypatch, config, palace_path, seeded_kg):
         """Sending arguments: null should return a result, not hang (#394)."""
@@ -632,6 +634,66 @@ class TestKGTools:
 
         result = tool_kg_stats()
         assert result["entities"] >= 4
+
+    def test_kg_recall_separates_answer_and_support(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_kg_add, tool_kg_recall
+
+        add_result = tool_kg_add(
+            subject="MemPalace",
+            predicate="uses",
+            object="CUDA exact search",
+            fact_type="implementation",
+            scope="cuda",
+            support_text="Parity tests passed.",
+            source_drawer_id="drawer_cuda",
+        )
+        assert add_result["success"] is True
+
+        recall = tool_kg_recall(entity="MemPalace", scope="cuda")
+
+        assert recall["answer_facts"][0]["object"] == "CUDA exact search"
+        assert recall["support"][0]["source_drawer_id"] == "drawer_cuda"
+        assert "hidden answer-deciding truth" in recall["policy"]
+
+    def test_kg_supersede_and_maintenance_tools(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import (
+            tool_kg_add,
+            tool_kg_maintenance,
+            tool_kg_recall,
+            tool_kg_supersede,
+        )
+
+        tool_kg_add("Alice", "works_at", "OldCo", scope="career")
+        supersede = tool_kg_supersede(
+            "Alice",
+            "works_at",
+            "OldCo",
+            "NewCo",
+            valid_from="2026-04-15",
+            scope="career",
+        )
+        assert supersede["success"] is True
+        assert supersede["superseded_fact_ids"]
+
+        recall = tool_kg_recall("Alice", scope="career")
+        assert [fact["object"] for fact in recall["answer_facts"]] == ["NewCo"]
+
+        maintenance = tool_kg_maintenance(action="report")
+        assert maintenance["success"] is True
+        assert "duplicate_active_fact_groups" in maintenance["report"]
+
+    def test_kg_replay_export_tool(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_kg_add, tool_kg_export_replay
+
+        tool_kg_add("Project", "has_status", "diagnostic", scope="cuda")
+        exported = tool_kg_export_replay()
+
+        assert exported["success"] is True
+        assert exported["count"] == 1
+        assert exported["events"][0]["operation"] == "add_triple"
 
 
 # ── Diary Tools ─────────────────────────────────────────────────────────
