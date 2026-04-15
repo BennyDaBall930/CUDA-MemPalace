@@ -36,6 +36,12 @@ interface is defined in [`mempalace/backends/base.py`](mempalace/backends/base.p
 and alternative backends can be dropped in without touching the rest of
 the system.
 
+This CUDA fork adds an opt-in exact-search lane for local GPU campaigns:
+Chroma remains the durable source of truth, a persisted exact sidecar provides
+deterministic retrieval, and optional custom CUDA kernels can replace torch
+score-vector/top-k work only when parity tests pass. Claims remain diagnostic
+until score parity and exact top-k ID parity are shown.
+
 Nothing leaves your machine unless you opt in.
 
 Architecture, concepts, and mining flows:
