@@ -84,6 +84,13 @@ def sanitize_content(value: str, max_length: int = 100_000) -> str:
 
 DEFAULT_PALACE_PATH = os.path.expanduser("~/.mempalace/palace")
 DEFAULT_COLLECTION_NAME = "mempalace_drawers"
+DEFAULT_EMBEDDING_BACKEND = "auto"
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_EMBEDDING_DEVICE = "auto"
+DEFAULT_SEARCH_BACKEND = "auto"
+DEFAULT_SEARCH_DEVICE = "auto"
+DEFAULT_SEARCH_TILE_SIZE = 32768
+DEFAULT_EXACT_KERNEL_BACKEND = "auto"
 
 DEFAULT_TOPIC_WINGS = [
     "emotions",
@@ -177,6 +184,59 @@ class MempalaceConfig:
         return self._file_config.get("collection_name", DEFAULT_COLLECTION_NAME)
 
     @property
+    def embedding_backend(self):
+        """Embedding implementation used for ingest and query encoding."""
+        return os.environ.get("MEMPALACE_EMBEDDING_BACKEND") or self._file_config.get(
+            "embedding_backend", DEFAULT_EMBEDDING_BACKEND
+        )
+
+    @property
+    def embedding_model(self):
+        """Embedding model identifier for custom embedders."""
+        return os.environ.get("MEMPALACE_EMBEDDING_MODEL") or self._file_config.get(
+            "embedding_model", DEFAULT_EMBEDDING_MODEL
+        )
+
+    @property
+    def embedding_device(self):
+        """Preferred runtime device for embedding inference."""
+        return os.environ.get("MEMPALACE_EMBEDDING_DEVICE") or self._file_config.get(
+            "embedding_device", DEFAULT_EMBEDDING_DEVICE
+        )
+
+    @property
+    def search_backend(self):
+        """Search implementation layered over the persistent Chroma store."""
+        return os.environ.get("MEMPALACE_SEARCH_BACKEND") or self._file_config.get(
+            "search_backend", DEFAULT_SEARCH_BACKEND
+        )
+
+    @property
+    def search_device(self):
+        """Preferred runtime device for exact search."""
+        return os.environ.get("MEMPALACE_SEARCH_DEVICE") or self._file_config.get(
+            "search_device", DEFAULT_SEARCH_DEVICE
+        )
+
+    @property
+    def search_tile_size(self):
+        """Chunk size for tiled torch search over persisted embeddings."""
+        raw_value = os.environ.get("MEMPALACE_SEARCH_TILE_SIZE")
+        if raw_value is None:
+            raw_value = self._file_config.get("search_tile_size", DEFAULT_SEARCH_TILE_SIZE)
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return DEFAULT_SEARCH_TILE_SIZE
+
+    @property
+    def exact_kernel_backend(self):
+        """Optional custom scoring kernel for exact search. Falls back safely to torch."""
+        return os.environ.get("MEMPALACE_EXACT_KERNEL_BACKEND") or self._file_config.get(
+            "exact_kernel_backend", DEFAULT_EXACT_KERNEL_BACKEND
+        )
+
+    @property
     def people_map(self):
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():
@@ -266,6 +326,13 @@ class MempalaceConfig:
             default_config = {
                 "palace_path": DEFAULT_PALACE_PATH,
                 "collection_name": DEFAULT_COLLECTION_NAME,
+                "embedding_backend": DEFAULT_EMBEDDING_BACKEND,
+                "embedding_model": DEFAULT_EMBEDDING_MODEL,
+                "embedding_device": DEFAULT_EMBEDDING_DEVICE,
+                "search_backend": DEFAULT_SEARCH_BACKEND,
+                "search_device": DEFAULT_SEARCH_DEVICE,
+                "search_tile_size": DEFAULT_SEARCH_TILE_SIZE,
+                "exact_kernel_backend": DEFAULT_EXACT_KERNEL_BACKEND,
                 "topic_wings": DEFAULT_TOPIC_WINGS,
                 "hall_keywords": DEFAULT_HALL_KEYWORDS,
             }

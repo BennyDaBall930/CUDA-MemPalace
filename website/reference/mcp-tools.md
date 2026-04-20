@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Detailed parameter schemas for all 29 MCP tools.
+Detailed parameter schemas for all 35 MCP tools.
 
 ## Palace — Read Tools
 
@@ -188,6 +188,27 @@ Add a fact to the knowledge graph.
 
 ---
 
+### `mempalace_kg_add_structured`
+
+Add a typed/scoped fact with explicit support evidence.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subject` | string | **Yes** | The entity doing/being something |
+| `predicate` | string | **Yes** | Relationship type |
+| `object` | string | **Yes** | Connected entity or value |
+| `valid_from` | string | No | When this became true |
+| `source_closet` | string | No | Supporting closet ID |
+| `source_drawer_id` | string | No | Supporting drawer ID |
+| `source_file` | string | No | Supporting source file |
+| `fact_type` | string | No | Fact type, e.g. relation, preference, claim |
+| `scope` | string | No | Fact scope, e.g. global or project name |
+| `support_text` | string | No | Short evidence excerpt or note |
+
+**Returns:** `{ success, triple_id, fact }`
+
+---
+
 ### `mempalace_kg_invalidate`
 
 Mark a fact as no longer true.
@@ -222,6 +243,82 @@ Knowledge graph overview.
 **Parameters:** None
 
 **Returns:** `{ entities, triples, current_facts, expired_facts, relationship_types }`
+
+---
+
+### `mempalace_kg_recall`
+
+Recall structured facts while separating answer facts from support evidence.
+Support is inspectable evidence, not hidden answer-deciding truth.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `entity` | string | **Yes** | Entity to recall |
+| `as_of` | string | No | Optional YYYY-MM-DD date filter |
+| `direction` | string | No | `outgoing`, `incoming`, or `both` |
+| `scope` | string | No | Optional fact scope |
+
+**Returns:** `{ entity, scope, as_of, answer_facts, support, count, policy }`
+
+---
+
+### `mempalace_kg_supersede`
+
+Replace an old fact with a new fact, closing the old fact and linking the supersession.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subject` | string | **Yes** | Entity |
+| `predicate` | string | **Yes** | Relationship |
+| `old_object` | string | **Yes** | Object that is no longer current |
+| `new_object` | string | **Yes** | Replacement object |
+| `valid_from` | string | No | When the new fact became true |
+| `ended` | string | No | When the old fact stopped being true |
+| `scope` | string | No | Fact scope |
+| `reason` | string | No | Reason for supersession |
+| `support_text` | string | No | Short supporting evidence |
+| `source_drawer_id` | string | No | Supporting drawer ID |
+| `source_file` | string | No | Supporting source file |
+
+**Returns:** `{ success, new_fact_id, superseded_fact_ids, scope }`
+
+---
+
+### `mempalace_kg_maintenance`
+
+Run explicit KG maintenance: report, cleanup orphan entities, or consolidate duplicate active facts.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | No | `report`, `cleanup`, or `consolidate` |
+| `dry_run` | boolean | No | Preview changes without mutating data |
+
+**Returns:** `{ success, action, report | result }`
+
+---
+
+### `mempalace_kg_export_replay`
+
+Export structured KG write events for replay/recovery.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | No | Maximum events to export |
+
+**Returns:** `{ success, events, count }`
+
+---
+
+### `mempalace_kg_replay`
+
+Replay exported KG events into this KG database for recovery.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `events` | array | **Yes** | Events returned by `mempalace_kg_export_replay` |
+| `clear_first` | boolean | No | Clear KG before replaying |
+
+**Returns:** `{ success, applied, skipped, cleared }`
 
 ---
 

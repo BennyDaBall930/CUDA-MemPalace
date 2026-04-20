@@ -3,6 +3,11 @@ dist/
 build/
 __pycache__/
 *.pyc
+*.pyd
+*.so
+*.dll
+*.lib
+*.exp
 .pytest_cache/
 mempal.yaml
 .a5c/

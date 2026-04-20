@@ -12,6 +12,17 @@
 
 # MemPalace
 
+## CUDA-MemPalace additions
+
+This fork advances MemPalace as a CUDA-accelerated persistent memory system while keeping the original local-first contract.
+
+- Opt-in CUDA/torch exact retrieval over Chroma-backed persisted embeddings.
+- Persisted exact sidecar with deterministic rebuild, stale marker, and finality behavior.
+- Optional compiled CUDA score-vector and deterministic top-k kernels behind a safe backend seam.
+- Fresh Start structured-memory layer with typed facts, relations, scopes, and support-separated recall.
+- Explicit maintenance tools for cleanup, replay/recovery, consolidation, and truth supersession.
+- Diagnostic evidence posture: parity and exact top-k ID correctness come before performance claims.
+
 Local-first AI memory. Verbatim storage, pluggable backend, 96.6% R@5 raw on LongMemEval — zero API calls.
 
 [![][version-shield]][release-link]
@@ -127,12 +138,14 @@ python benchmarks/longmemeval_bench.py /path/to/longmemeval_s_cleaned.json
 
 MemPalace includes a temporal entity-relationship graph with validity
 windows — add, query, invalidate, timeline — backed by local SQLite.
+CUDA-MemPalace extends that graph with typed facts, scopes, support references,
+replay events, and explicit supersession links.
 Usage and tool reference:
 [mempalaceofficial.com/concepts/knowledge-graph](https://mempalaceofficial.com/concepts/knowledge-graph.html).
 
 ## MCP server
 
-29 MCP tools cover palace reads/writes, knowledge-graph operations,
+35 MCP tools cover palace reads/writes, knowledge-graph operations,
 cross-wing navigation, drawer management, and agent diaries. Installation
 and the full tool list:
 [mempalaceofficial.com/reference/mcp-tools](https://mempalaceofficial.com/reference/mcp-tools.html).

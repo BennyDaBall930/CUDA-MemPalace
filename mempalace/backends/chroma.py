@@ -1,5 +1,7 @@
 """ChromaDB-backed MemPalace collection adapter."""
 
+from __future__ import annotations
+
 import logging
 import os
 import sqlite3
@@ -7,6 +9,8 @@ import sqlite3
 import chromadb
 
 from .base import BaseCollection
+from .exact_index import mark_exact_index_dirty
+from .torch_cuda_search import query_collection_with_torch
 
 logger = logging.getLogger(__name__)
 
@@ -43,22 +47,85 @@ def _fix_blob_seq_ids(palace_path: str):
         logger.exception("Could not fix BLOB seq_ids in %s", db_path)
 
 
+def _resolve_search_backend(search_backend: str | None, search_device: str | None) -> str:
+    backend = (search_backend or "auto").strip().lower()
+    if backend == "exact":
+        backend = "torch"
+    if backend != "auto":
+        return backend
+
+    try:
+        import torch
+    except ImportError:
+        return "chroma"
+
+    device = (search_device or "auto").strip().lower()
+    if device == "cpu":
+        return "chroma"
+    if device.startswith("cuda"):
+        return "torch" if torch.cuda.is_available() else "chroma"
+    return "torch" if torch.cuda.is_available() else "chroma"
+
+
+def _is_embedding_conflict_error(exc: Exception) -> bool:
+    return "Embedding function conflict" in str(exc)
+
+
 class ChromaCollection(BaseCollection):
     """Thin adapter over a ChromaDB collection."""
 
-    def __init__(self, collection):
+    def __init__(
+        self,
+        collection,
+        *,
+        palace_path: str | None = None,
+        embedding_function=None,
+        search_backend: str = "chroma",
+        search_device: str = "auto",
+        search_tile_size: int = 32768,
+        exact_kernel_backend: str | None = None,
+    ):
         self._collection = collection
+        self._palace_path = palace_path
+        self._embedding_function = embedding_function
+        self._search_backend = _resolve_search_backend(search_backend, search_device)
+        self._search_device = search_device
+        self._search_tile_size = max(1, int(search_tile_size))
+        self._exact_kernel_backend = exact_kernel_backend
 
     def add(self, *, documents, ids, metadatas=None):
         self._collection.add(documents=documents, ids=ids, metadatas=metadatas)
+        if self._palace_path:
+            mark_exact_index_dirty(self._palace_path)
 
     def upsert(self, *, documents, ids, metadatas=None):
         self._collection.upsert(documents=documents, ids=ids, metadatas=metadatas)
+        if self._palace_path:
+            mark_exact_index_dirty(self._palace_path)
 
     def update(self, **kwargs):
         self._collection.update(**kwargs)
+        if self._palace_path:
+            mark_exact_index_dirty(self._palace_path)
 
     def query(self, **kwargs):
+        if (
+            self._search_backend == "torch"
+            and self._embedding_function is not None
+            and kwargs.get("query_texts")
+        ):
+            try:
+                return query_collection_with_torch(
+                    self._collection,
+                    self._embedding_function,
+                    palace_path=self._palace_path,
+                    device=self._search_device,
+                    tile_size=self._search_tile_size,
+                    kernel_backend=self._exact_kernel_backend,
+                    **kwargs,
+                )
+            except Exception:
+                logger.exception("Torch search backend failed; falling back to Chroma query")
         return self._collection.query(**kwargs)
 
     def get(self, **kwargs):
@@ -66,6 +133,8 @@ class ChromaCollection(BaseCollection):
 
     def delete(self, **kwargs):
         self._collection.delete(**kwargs)
+        if self._palace_path:
+            mark_exact_index_dirty(self._palace_path)
 
     def count(self):
         return self._collection.count()
@@ -74,9 +143,22 @@ class ChromaCollection(BaseCollection):
 class ChromaBackend:
     """Factory for MemPalace's default ChromaDB backend."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        embedding_function=None,
+        search_backend: str = "chroma",
+        search_device: str = "auto",
+        search_tile_size: int = 32768,
+        exact_kernel_backend: str | None = None,
+    ):
         # Per-instance client cache: palace_path -> chromadb.PersistentClient
         self._clients: dict = {}
+        self._embedding_function = embedding_function
+        self._search_backend = search_backend
+        self._search_device = search_device
+        self._search_tile_size = search_tile_size
+        self._exact_kernel_backend = exact_kernel_backend
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -124,13 +206,37 @@ class ChromaBackend:
                 pass
 
         client = self._client(palace_path)
-        if create:
-            collection = client.get_or_create_collection(
-                collection_name, metadata={"hnsw:space": "cosine"}
+        embedding_function = self._embedding_function
+        try:
+            if create:
+                collection = client.get_or_create_collection(
+                    collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                    embedding_function=embedding_function,
+                )
+            else:
+                collection = client.get_collection(
+                    collection_name,
+                    embedding_function=embedding_function,
+                )
+        except ValueError as exc:
+            if not _is_embedding_conflict_error(exc):
+                raise
+            logger.info(
+                "Embedding function conflict for %s; reopening collection without overriding persisted embedder",
+                collection_name,
             )
-        else:
             collection = client.get_collection(collection_name)
-        return ChromaCollection(collection)
+            embedding_function = None
+        return ChromaCollection(
+            collection,
+            palace_path=palace_path,
+            embedding_function=embedding_function,
+            search_backend=self._search_backend,
+            search_device=self._search_device,
+            search_tile_size=self._search_tile_size,
+            exact_kernel_backend=self._exact_kernel_backend,
+        )
 
     def get_or_create_collection(
         self, palace_path: str, collection_name: str
@@ -147,6 +253,16 @@ class ChromaBackend:
     ) -> "ChromaCollection":
         """Create (not get-or-create) *collection_name* with cosine HNSW space."""
         collection = self._client(palace_path).create_collection(
-            collection_name, metadata={"hnsw:space": hnsw_space}
+            collection_name,
+            metadata={"hnsw:space": hnsw_space},
+            embedding_function=self._embedding_function,
         )
-        return ChromaCollection(collection)
+        return ChromaCollection(
+            collection,
+            palace_path=palace_path,
+            embedding_function=self._embedding_function,
+            search_backend=self._search_backend,
+            search_device=self._search_device,
+            search_tile_size=self._search_tile_size,
+            exact_kernel_backend=self._exact_kernel_backend,
+        )

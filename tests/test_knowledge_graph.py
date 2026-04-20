@@ -5,6 +5,8 @@ Covers: entity CRUD, triple CRUD, temporal queries, invalidation,
 timeline, stats, and edge cases (duplicate triples, ID collisions).
 """
 
+from mempalace.knowledge_graph import KnowledgeGraph
+
 
 class TestEntityOperations:
     def test_add_entity(self, kg):
@@ -137,3 +139,108 @@ class TestStats:
         assert stats["triples"] == 5
         assert stats["current_facts"] == 4  # 1 expired (Acme Corp)
         assert stats["expired_facts"] == 1
+
+
+class TestFreshStartStructuredMemory:
+    def test_scoped_typed_fact_recall_separates_answer_and_support(self, kg):
+        fact_id = kg.add_fact(
+            "MemPalace",
+            "uses",
+            "CUDA exact search",
+            fact_type="implementation",
+            scope="cuda",
+            source_drawer_id="drawer_cuda_1",
+            source_file="design.md",
+            support_text="CUDA exact search passed parity tests.",
+        )
+
+        global_recall = kg.structured_recall("MemPalace", scope="global")
+        scoped_recall = kg.structured_recall("MemPalace", scope="cuda")
+
+        assert global_recall["answer_facts"] == []
+        assert scoped_recall["answer_facts"][0]["id"] == fact_id
+        assert scoped_recall["answer_facts"][0]["fact_type"] == "implementation"
+        assert scoped_recall["answer_facts"][0]["scope"] == "cuda"
+        assert scoped_recall["support"][0]["fact_id"] == fact_id
+        assert scoped_recall["support"][0]["source_drawer_id"] == "drawer_cuda_1"
+        assert "hidden answer-deciding truth" in scoped_recall["policy"]
+
+    def test_supersede_closes_old_fact_and_links_replacement(self, kg):
+        old_id = kg.add_fact("Alice", "works_at", "OldCo", scope="career")
+
+        result = kg.supersede_fact(
+            "Alice",
+            "works_at",
+            "OldCo",
+            "NewCo",
+            valid_from="2026-04-15",
+            scope="career",
+            support_text="Alice said she moved to NewCo.",
+        )
+
+        assert result["superseded_fact_ids"] == [old_id]
+        current = kg.structured_recall("Alice", scope="career")["answer_facts"]
+        assert [(fact["predicate"], fact["object"]) for fact in current] == [("works_at", "NewCo")]
+
+        history = kg.query_entity("Alice", direction="outgoing", scope="career")
+        old_fact = [fact for fact in history if fact["object"] == "OldCo"][0]
+        new_fact = [fact for fact in history if fact["object"] == "NewCo"][0]
+        assert old_fact["current"] is False
+        assert old_fact["superseded_by"] == new_fact["id"]
+        assert new_fact["supersedes"] == old_id
+
+    def test_cleanup_removes_only_orphan_entities(self, kg):
+        kg.add_entity("Orphan", entity_type="concept")
+        kg.add_fact("Alice", "knows", "Bob")
+
+        report = kg.maintenance_report()
+        assert report["orphan_entities"] == 1
+
+        dry_run = kg.cleanup(dry_run=True)
+        assert dry_run["changed"] == 0
+        assert "orphan" in dry_run["orphan_entities"]
+
+        cleanup = kg.cleanup(dry_run=False)
+        assert cleanup["changed"] == 1
+        assert kg.maintenance_report()["orphan_entities"] == 0
+
+    def test_consolidate_marks_duplicate_active_facts_without_deleting_truth(self, kg):
+        fact_id = kg.add_fact("Alice", "likes", "coffee", scope="prefs")
+        conn = kg._conn()
+        conn.execute(
+            """
+            INSERT INTO triples (
+                id, subject, predicate, object, fact_type, scope, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("duplicate_fact", "alice", "likes", "coffee", "relation", "prefs", "active"),
+        )
+        conn.commit()
+
+        report = kg.maintenance_report()
+        assert report["duplicate_active_fact_groups"] == 1
+
+        result = kg.consolidate(dry_run=False)
+        assert result["changed"] == 1
+        assert result["duplicate_facts"] == ["duplicate_fact"]
+        current = kg.structured_recall("Alice", scope="prefs")["answer_facts"]
+        assert [fact["id"] for fact in current] == [fact_id]
+
+    def test_replay_events_recovers_structured_facts(self, kg, tmp_path):
+        kg.add_fact(
+            "Project",
+            "has_status",
+            "diagnostic",
+            scope="cuda",
+            support_text="Parity first.",
+        )
+        events = kg.export_replay_events()
+
+        recovered = KnowledgeGraph(db_path=str(tmp_path / "recovered.sqlite3"))
+        result = recovered.replay_events(events, clear_first=True)
+
+        assert result["applied"] == 1
+        recall = recovered.structured_recall("Project", scope="cuda")
+        assert recall["answer_facts"][0]["object"] == "diagnostic"
+        assert recall["support"][0]["support_text"] == "Parity first."

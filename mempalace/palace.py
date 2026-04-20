@@ -9,6 +9,8 @@ import hashlib
 import os
 
 from .backends.chroma import ChromaBackend
+from .backends.embeddings import build_embedding_function
+from .config import MempalaceConfig
 
 SKIP_DIRS = {
     ".git",
@@ -36,7 +38,44 @@ SKIP_DIRS = {
     "target",
 }
 
-_DEFAULT_BACKEND = ChromaBackend()
+_BACKEND_CACHE = None
+_BACKEND_CACHE_KEY = None
+
+
+def _backend_signature(cfg: MempalaceConfig):
+    return (
+        cfg.embedding_backend,
+        cfg.embedding_model,
+        cfg.embedding_device,
+        cfg.search_backend,
+        cfg.search_device,
+        cfg.search_tile_size,
+        cfg.exact_kernel_backend,
+    )
+
+
+def reset_backend_cache():
+    """Test helper for clearing cached backend wiring."""
+    global _BACKEND_CACHE, _BACKEND_CACHE_KEY
+    _BACKEND_CACHE = None
+    _BACKEND_CACHE_KEY = None
+
+
+def _get_backend():
+    global _BACKEND_CACHE, _BACKEND_CACHE_KEY
+    cfg = MempalaceConfig()
+    cache_key = _backend_signature(cfg)
+    if _BACKEND_CACHE is None or _BACKEND_CACHE_KEY != cache_key:
+        embedding_function = build_embedding_function(cfg)
+        _BACKEND_CACHE = ChromaBackend(
+            embedding_function=embedding_function,
+            search_backend=cfg.search_backend,
+            search_device=cfg.search_device,
+            search_tile_size=cfg.search_tile_size,
+            exact_kernel_backend=cfg.exact_kernel_backend,
+        )
+        _BACKEND_CACHE_KEY = cache_key
+    return _BACKEND_CACHE
 
 # Schema version for drawer normalization. Bump when the normalization
 # pipeline changes in a way that existing drawers should be rebuilt to pick up
@@ -55,7 +94,7 @@ def get_collection(
     create: bool = True,
 ):
     """Get the palace collection through the backend layer."""
-    return _DEFAULT_BACKEND.get_collection(
+    return _get_backend().get_collection(
         palace_path,
         collection_name=collection_name,
         create=create,
